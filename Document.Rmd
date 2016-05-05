@@ -11,13 +11,10 @@ knitr::opts_chunk$set(echo = TRUE)
 #bibliotecas usadas
 require(dplyr)
 require(ggplot2)
-require(corrplot)
-require(ggplot2)
-theme_set(theme_bw())
-require(GGally)
-require(dplyr)
 require(caret)
-require(vcd)
+require(dplyr)
+require(mlbench)
+require(C50)
 ```
 
 ## Análise e Previsões da Votação do Impeachment
@@ -36,12 +33,13 @@ dados <- read.csv2("~/ad2/Problema_5/data/deputados_temas_e_impeachment.csv", en
 ```{r summary}
 
 #sumario dos dados
-summary(dados)
+summary(dados, na.rm=T)
 
 ```
+
 Nos dados podemos encontrar os nomes dos deputados junto com seus respectivos partidos, estados e seus votos em diversos temas que são propostas que estavam/estão em votação na câmara:
   ------
-  1 Cobrança de cursos em universidades públic
+  1 Cobrança de cursos em universidades públicas
   2 Tributação serviços de internet
   3 Terrorismo
   4 Infaticídio indígena
@@ -71,99 +69,145 @@ str(dados)
 
 ```
 
-A princípio temos uma amostra com 540 observações e 25 váriaveis, sendo a variável IMPEACHMENT a minha variável resposta.
+A amostra possui 540 observações e 25 váriaveis, sendo a variável IMPEACHMENT a minha variável resposta.
 
-```{r plot1}
+```{r plot1 }
 
 qplot(dados$IMPEACHMENT, xlab = "Voto", ylab = "Quantidade")
 
 ```
 
-## Regressão logística
+## Previsões
 
-Para essa primeira entrega, irei gerar um modelo de regressão utilizand as váriaveis que juguei serem mais relevantes, são elas: O partido e o estado de cada depultado e o valor da votação do depultado nos temas 5 e 6 sobre maior idade penal.
+Serão feitas previsões utilizando três modelos diferentes, são eles: Regressão Logistíca, KNN e Árvore de decisões. Ao final, os resultados obtidos nas previsões feitas por esses três modelos irão ser comparados afim de saber qual deles possuí o melhor desempenho na predição.
 
 ### Tratando Dados
 
-```{r filter}
+Para melhorar os calculos para as previsões, serão considerados apenas os votos SIM e NÃO da coluna do IMPEACHMENT. As váriaveis que serão consideradas nos calculos são UF e partido.
 
-#filtrando dados
-dados_filtrados <- select(dados, UF, partido)
+```{r filter1}
 
-#tratando e organizando dados
-dados_filtrados$tema_5[dados$tema_5 == "sim"] <- 1
-dados_filtrados$tema_5[dados$tema_5 == "não"] <- 0
-dados_filtrados$tema_5[dados$tema_5 == "não votou"] <- 2
+dados <- filter(dados, grepl('SIM|NAO', dados$IMPEACHMENT)) %>% droplevels()
 
-dados_filtrados$tema_6[dados$tema_6 == "sim"] <- 1
-dados_filtrados$tema_6[dados$tema_6 == "não"] <- 0
-dados_filtrados$tema_6[dados$tema_6 == "não votou"] <- 2
-
-dados_filtrados$IMPEACHMENT[dados$IMPEACHMENT == "SIM"] <- "Sim"
-dados_filtrados$IMPEACHMENT[dados$IMPEACHMENT == "NAO"] <- "Não"
-
-dados_filtrados$tema_5 <- as.factor(dados_filtrados$tema_5)
-dados_filtrados$tema_6 <- as.factor(dados_filtrados$tema_6)
-dados_filtrados$IMPEACHMENT <- as.factor(dados_filtrados$IMPEACHMENT)
-
-#Eliminando NA's
-dados_filtrados <-  na.omit(dados_filtrados)
-
-summary(dados_filtrados)
+dados$IMPEACHMENT <- as.factor(dados$IMPEACHMENT)
 
 ```
+### Divisão dos dados
+A divisão da amostra de dados será feita de forma aleatória de modo que 75% dos dados sejam utilizados no treino e os 25% restantes serão usados no test.
 
-Acima, eu transformei as váriaveis categoricas em númericas de forma que: 
-  -----
-  1 -> Sim
-  0 -> Não
-  2 -> Não votou
-  
-Dessa forma, os calculos das correlações e da regressão em sí são facilitados. Eu desconsiderei também elementos que não possuem informações numa determinada coluna (NA's). E sobre os votos do impeachment, filtrei apenas os votos positivos e negativos, pois é o que me interessa.
-
-### Criando Modelo
-
-```{r partition}
+```{r division}
 
 #criando partições
-split <- createDataPartition(y = dados_filtrados$IMPEACHMENT, p = 0.70, list = F)
-treino <- dados_filtrados[split,]
-teste <- dados_filtrados[-split,]
+split <- createDataPartition(y = dados$IMPEACHMENT, p = 0.75, list = F)
+treino <- dados[split,]
+teste <- dados[-split,]
+
+#adicionando cabeçalho
+names(treino) = names(dados)
+names(teste) = names(dados)
 
 ```
 
-Utilizarei 75% dos dados no treino e os outros 25% para teste e validação do modelo
+### Regressão Logistíca
 
-```{r logit}
+#### Treinando modelo
 
-#criando modelo
-logistica <- glm(IMPEACHMENT ~ ., family = 'binomial', data = treino)
+```{r logit, results=FALSE, warning=FALSE}
 
+#treinando modelo
+logistica <- train(IMPEACHMENT ~ UF + partido, method = 'glm', family = 'binomial', data=treino)
+
+#sumario do modelo
 summary(logistica)
 
+```
+
+#### Fazendo Previsões
+
+```{r prediction1, warning=FALSE}
+
+#realizando predições
+predicoes_glm <- predict(logistica, teste)
+
+confusionMatrix(teste$IMPEACHMENT, predicoes_glm)
 
 ```
 
-```{r ratio}
+###KNN
 
-# Odds ratio:
-exp(logistica$coefficients)
+#### Treinando modelo
+
+```{r knn, results=FALSE, warning=FALSE}
+
+#treinando modelo
+ctrl_knn <- trainControl(method = "repeatedcv", number = 10)
+knnFit <- train(IMPEACHMENT ~ UF + partido, 
+                data = treino, method="knn", 
+                trControl = ctrl_knn, 
+                preProcess = c("center","scale"), 
+                tuneGrid = expand.grid(.k = 2:10),
+                metric = "Accuracy")
+
+#sumario do modelo
+knnFit
 
 ```
 
-### Fazendo Previsões
+#### Fazendo Previsões
 
-```{r predictions}
+```{r prediction2, warning=FALSE}
 
-#realisando previsões
-previsoes <- predict(logistica, teste, type = "response")
+#realizando predições
+predicoes_knn <- predict(knnFit, teste)
 
-previsoes.logistica <- rep(0,length(previsoes))
-previsoes.logistica[previsoes >= 0.5] <- 1
-
-table(previsoes.logistica, teste$IMPEACHMENT)
+confusionMatrix(teste$IMPEACHMENT, predicoes_knn)
 
 ```
+
+### Floresta
+
+#### Treinando modelo
+
+```{r tree, results=FALSE, warning=FALSE}
+
+#configurando modelo
+grid = expand.grid(.winnow = c(TRUE,FALSE),
+                   .trials = c(1,5,10,20,30,40,50,60,70,80,90,100),
+                   .model="tree")
+ctrl_tree = trainControl(method = "repeatedcv", number = 10, repeats = 10,returnResamp = "all")
+
+#treinando modelo
+tree = train(IMPEACHMENT ~ UF + partido, 
+             data = treino,
+             tuneGrid = grid,
+             trControl = ctrl_tree,
+             method = "C5.0",
+             verbose = FALSE,
+             metric = "Accuracy")
+
+
+#sumario do modelo
+plot(tree)
+
+```
+
+#### Fazendo Previsões
+
+```{r prediction3, results=FALSE, warning=FALSE}
+
+#realizando predições
+predicoes_tree <- predict(tree, teste)
+
+confusionMatrix(teste$IMPEACHMENT, predicoes_tree)
+
+```
+
+## Conclusões
+
+Dentre o três modelos analisados, o modelo de regressão logistíca e de árvores de decisões tiveram um desempenho melhor em relação ao KNN, ambos possuem uma acurácia elevada, embora o modelo de árvores seja um pouco mais preciso. O modelo de regressão logistica é bastante simples e por causa disso é menos custoso, o KNN e o modelo de árvores gastam mais tempo e mais recusos computacionais devido as diversas repetições que eles promovem para depois pegar o melhor resultado dessas repetições. 
+
+
+
 
 
 
